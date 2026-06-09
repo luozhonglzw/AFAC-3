@@ -20,15 +20,23 @@
 
 ```
 ├── data_explore.py          # 数据探索与质量报告
-├── train_cls.py             # 任务A 训练脚本
-├── predict_cls.py           # 任务A 预测脚本
-├── train_rec.py             # 任务B 训练脚本 (SASRec)
-├── predict_rec.py           # 任务B 预测脚本
+├── train_cls.py             # 任务A GCN训练脚本
+├── predict_cls.py           # 任务A GCN+LP集成预测
+├── predict_cls_deg.py       # 任务A 度加权集成+阈值优化
+├── gat_model.py             # 任务A 稀疏GAT模型
+├── appnp_model.py           # 任务A APPNP模型
+├── train_cls_feat.py        # 任务A GCN+图结构特征
+├── train_task_b_v4.py       # 任务B 频率加权推荐
+├── train_task_b_v6.py       # 任务B l2t权重优化
+├── train_rec.py             # 任务B SASRec训练
+├── predict_rec.py           # 任务B SASRec预测
 ├── agent_framework.py       # 自动化实验 Agent 框架
 ├── experiment_runner.py     # 实验执行器
 ├── trajectory_logger.py     # 轨迹日志记录器
-├── A1.csv                   # 任务A 提交文件
-├── A2.csv                   # 任务B 提交文件
+├── trajectory_B1.json       # 任务A 实验轨迹
+├── trajectory_B2.json       # 任务B 实验轨迹
+├── A1.csv                   # 任务A 提交文件 (73.92%)
+├── A2.csv                   # 任务B 提交文件 (81.3%)
 ├── prediction.zip           # 最终提交包
 └── README.md                # 项目说明
 ```
@@ -91,9 +99,15 @@ python data_explore.py     # 输出数据质量报告
 
 | 任务 | 模型 | 验证指标 | 备注 |
 |------|------|----------|------|
-| A 分类 | GCN-3layer | 70.97% Accuracy | hidden=256, dropout=0.5 |
-| A 分类 | GAT | 67.92% Accuracy | Agent 搜索结果 |
+| A 分类 | GCN-3layer | 70.83% Accuracy | hidden=256, dropout=0.5 |
+| A 分类 | GCN+LP 平均集成 | 73.15% Accuracy | GCN + Label Propagation |
+| A 分类 | GCN+LP 度加权集成 | 73.65% Accuracy | 度感知LP-heavy策略 |
+| A 分类 | GCN+LP+阈值优化 | **73.92% Accuracy** | +per-class阈值boost |
+| A 分类 | GAT | 70.88% Accuracy | 稀疏GAT，不如GCN |
+| A 分类 | APPNP | 72.65% Accuracy | K=5, alpha=0.1 |
 | B 推荐 | 启发式基线 | Hit@10=64.7% | 马尔可夫 + 协同过滤 |
+| B 推荐 | 频率加权 | Hit@10=75.9% | freq_weight=1000 |
+| B 推荐 | 频率+l2t加权 | **Hit@10=81.3%** | l2t_weight=200 |
 | B 推荐 | SASRec | Hit@10=38.85% | CPU 训练，欠拟合 |
 
 ## Agent 搜索实验轨迹
