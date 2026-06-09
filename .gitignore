@@ -1,0 +1,31 @@
+# 数据文件 (比赛数据，不上传)
+A分类/
+A推荐/
+A分类.zip
+A推荐.zip
+
+# 模型检查点
+checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.log
+output/
