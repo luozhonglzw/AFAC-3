@@ -36,9 +36,18 @@
       "config": {"freq_weight": 1000, "markov_weight": 0.5, "l2t_weight": 200},
       "hit_at_10": 0.813,
       "notes": "last_to_target weight optimized from 2.0 to 200.0. Major improvement."
+    },
+    {
+      "id": 6,
+      "model": "Heuristic+NDCG_boost+intersection",
+      "config": {"freq_weight": 1000, "markov_weight": 0.18, "l2t_weight": 2000, "l2t_boost": 50, "intersection_boost": 4.5},
+      "hit_at_10": 0.854,
+      "ndcg_at_10": 0.606,
+      "notes": "NDCG optimization: multiplicative l2t boost (50x) + intersection boost (4.5x for l2t items also in history). Reduces mw from 0.5 to 0.18 to let l2t signal dominate."
     }
   ],
-  "best_model": "Heuristic+freq+l2t",
-  "best_hit_at_10": 0.813,
+  "best_model": "Heuristic+NDCG_boost+intersection",
+  "best_hit_at_10": 0.854,
+  "best_ndcg_at_10": 0.606,
   "timestamp": "2026-06-09"
 }

@@ -107,7 +107,8 @@ python data_explore.py     # 输出数据质量报告
 | A 分类 | APPNP | 72.65% Accuracy | K=5, alpha=0.1 |
 | B 推荐 | 启发式基线 | Hit@10=64.7% | 马尔可夫 + 协同过滤 |
 | B 推荐 | 频率加权 | Hit@10=75.9% | freq_weight=1000 |
-| B 推荐 | 频率+l2t加权 | **Hit@10=81.3%** | l2t_weight=200 |
+| B 推荐 | 频率+l2t加权 | Hit@10=81.3% | l2t_weight=200 |
+| B 推荐 | NDCG优化+交叉增强 | **Hit@10=85.4%, NDCG@10=0.606** | l2t_boost=50, ib=4.5 |
 | B 推荐 | SASRec | Hit@10=38.85% | CPU 训练，欠拟合 |
 
 ## Agent 搜索实验轨迹
