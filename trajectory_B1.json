@@ -1,0 +1,58 @@
+{
+  "task": "A_classification",
+  "description": "Graph node classification - 13752 nodes, 767 features, 10 classes",
+  "experiments": [
+    {
+      "id": 1,
+      "model": "GCN",
+      "config": {"hidden_dim": 256, "num_layers": 3, "dropout": 0.5, "lr": 0.01, "weight_decay": 5e-4},
+      "val_acc": 0.7083,
+      "notes": "Baseline GCN with effective sample number class weights"
+    },
+    {
+      "id": 2,
+      "model": "GCN+LP",
+      "config": {"ensemble": "average", "lp_iters": 30, "lp_alpha": 0.2},
+      "val_acc": 0.7315,
+      "notes": "GCN + Label Propagation average ensemble"
+    },
+    {
+      "id": 3,
+      "model": "GAT",
+      "config": {"hidden_dim": 256, "num_layers": 3, "num_heads": 4, "dropout": 0.5, "lr": 0.005},
+      "val_acc": 0.7088,
+      "notes": "Sparse GAT with edge-wise attention. Worse than GCN."
+    },
+    {
+      "id": 4,
+      "model": "APPNP",
+      "config": {"hidden_dim": 256, "num_layers": 2, "K": 5, "alpha": 0.1, "dropout": 0.5},
+      "val_acc": 0.7265,
+      "notes": "APPNP K=5 alpha=0.1. Grid search over K=[5,10], alpha=[0.1,0.2]."
+    },
+    {
+      "id": 5,
+      "model": "GCN+feat",
+      "config": {"hidden_dim": 256, "num_layers": 3, "feat_dim": 769},
+      "val_acc": 0.7124,
+      "notes": "GCN with degree + neighbor avg degree features (767->769). No improvement."
+    },
+    {
+      "id": 6,
+      "model": "GCN+LP_deg_weighted",
+      "config": {"strategy": "deg_lp_heavy", "gcn_w_range": [0.1, 0.4]},
+      "val_acc": 0.7365,
+      "notes": "Degree-aware LP-heavy ensemble. High degree -> more GCN, low degree -> more LP."
+    },
+    {
+      "id": 7,
+      "model": "GCN+LP_deg+threshold",
+      "config": {"strategy": "deg_lp_heavy", "thresholds": [1.0, 1.02, 1.02, 1.0, 1.0, 1.0, 1.05, 1.0, 1.0, 1.0]},
+      "val_acc": 0.7392,
+      "notes": "Degree-weighted ensemble + per-class threshold optimization. Boost classes 1,2,6."
+    }
+  ],
+  "best_model": "GCN+LP_deg+threshold",
+  "best_val_acc": 0.7392,
+  "timestamp": "2026-06-09"
+}

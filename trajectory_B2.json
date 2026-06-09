@@ -1,0 +1,44 @@
+{
+  "task": "B_recommendation",
+  "description": "Sequence recommendation - 50000 users, 2156 items, cold-start problem",
+  "experiments": [
+    {
+      "id": 1,
+      "model": "Heuristic_baseline",
+      "config": {"markov_weight": 0.5, "cooccur_weight": 0.3, "freq_weight": 0.2, "l2t_weight": 2.0},
+      "hit_at_10": 0.647,
+      "notes": "Markov transitions + co-occurrence + frequency + last-to-target mapping"
+    },
+    {
+      "id": 2,
+      "model": "SASRec",
+      "config": {"hidden_dim": 64, "num_heads": 2, "num_layers": 2, "max_len": 50},
+      "hit_at_10": 0.3885,
+      "notes": "SASRec self-attention model. CPU training, underfitting. Much worse than heuristic."
+    },
+    {
+      "id": 3,
+      "model": "Heuristic+cold_start",
+      "config": {"cold_threshold": 3, "cold_strategy": "user_feature_similarity"},
+      "hit_at_10": 0.658,
+      "notes": "Hybrid: warm users use heuristic, cold users use user feature cosine similarity"
+    },
+    {
+      "id": 4,
+      "model": "Heuristic+freq_weight",
+      "config": {"freq_weight": 1000, "markov_weight": 0.5, "l2t_weight": 2.0},
+      "hit_at_10": 0.759,
+      "notes": "Key insight: user frequency signal is extremely strong. freq_weight optimized from 0.2 to 1000."
+    },
+    {
+      "id": 5,
+      "model": "Heuristic+freq+l2t",
+      "config": {"freq_weight": 1000, "markov_weight": 0.5, "l2t_weight": 200},
+      "hit_at_10": 0.813,
+      "notes": "last_to_target weight optimized from 2.0 to 200.0. Major improvement."
+    }
+  ],
+  "best_model": "Heuristic+freq+l2t",
+  "best_hit_at_10": 0.813,
+  "timestamp": "2026-06-09"
+}
