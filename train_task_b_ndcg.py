@@ -1,4 +1,4 @@
-"""NDCG-optimized recommendation: fw=1000, mw=0.18, l2t=2000, boost=50, ib=4.5"""
+"""NDCG-optimized recommendation for test distribution (short seq + cold-start)"""
 
 import os
 import numpy as np
@@ -34,6 +34,21 @@ def seq_len(s):
     return len(str(s).split(","))
 
 
+def build_user_feature_matrix(user_df):
+    feat_cols = [c for c in user_df.columns if c.startswith("u_cat_")]
+    feat_matrix = pd.get_dummies(user_df[feat_cols], columns=feat_cols).values.astype(np.float32)
+    return feat_matrix, user_df["uid"].values
+
+
+def build_user_item_preferences(train_df):
+    user_prefs = {}
+    for _, row in train_df.iterrows():
+        uid = row["uid"]
+        target = row["target_iid"]
+        user_prefs.setdefault(uid, []).append(target)
+    return user_prefs
+
+
 def predict_warm(seq_raw, seq_dedup, item_counts, transitions, cooccur,
                  last_to_target, topk=10):
     scores = defaultdict(float)
@@ -65,7 +80,6 @@ def predict_warm(seq_raw, seq_dedup, item_counts, transitions, cooccur,
     for iid, cnt in user_freq.items():
         scores[iid] += 1000.0 * cnt
 
-    # NDCG optimization: boost l2t items, extra boost if also in history
     for item in l2t_items:
         mult = 50.0
         if item in raw_set:
@@ -76,53 +90,32 @@ def predict_warm(seq_raw, seq_dedup, item_counts, transitions, cooccur,
     return [iid for iid, _ in ranked[:topk]]
 
 
-def build_user_feature_matrix(user_df):
-    feat_cols = [c for c in user_df.columns if c.startswith("u_cat_")]
-    feat_matrix = pd.get_dummies(user_df[feat_cols], columns=feat_cols).values.astype(np.float32)
-    return feat_matrix, user_df["uid"].values
-
-
-def build_user_item_preferences(train_df):
-    user_prefs = {}
-    for _, row in train_df.iterrows():
-        uid = row["uid"]
-        target = row["target_iid"]
-        items = [target]
-        counts = parse_seq_counts(row["item_seq_counts"])
-        if counts:
-            top_items = sorted(counts.items(), key=lambda x: -x[1])[:5]
-            items.extend([iid for iid, _ in top_items])
-        user_prefs[uid] = items
-    return user_prefs
-
-
-def predict_cold(uid, user_feat_matrix, user_uids, user_item_prefs, item_counts, topk=10):
+def predict_cold(uid, user_feat_matrix, user_uids, user_item_prefs, target_dist, topk=10):
     from sklearn.metrics.pairwise import cosine_similarity
     user_idx = np.where(user_uids == uid)[0]
     if len(user_idx) == 0:
-        return [iid for iid, _ in item_counts.most_common(topk)]
+        return [iid for iid, _ in target_dist.most_common(topk)]
     user_idx = user_idx[0]
     user_vec = user_feat_matrix[user_idx:user_idx+1]
     sims = cosine_similarity(user_vec, user_feat_matrix)[0]
     sim_indices = np.argsort(sims)[::-1]
-    top_sim_users = []
+    item_scores = defaultdict(float)
+    count = 0
     for idx in sim_indices:
         sim_uid = user_uids[idx]
         if sim_uid != uid and sim_uid in user_item_prefs:
-            top_sim_users.append((sim_uid, sims[idx]))
-        if len(top_sim_users) >= 20:
-            break
-    item_scores = defaultdict(float)
-    for sim_uid, sim_score in top_sim_users:
-        for item in user_item_prefs[sim_uid]:
-            item_scores[item] += sim_score
-    for iid, cnt in item_counts.most_common(topk):
+            for target in user_item_prefs[sim_uid]:
+                item_scores[target] += sims[idx]
+            count += 1
+            if count >= 50:
+                break
+    for iid, cnt in target_dist.most_common(20):
         if iid not in item_scores:
             item_scores[iid] += 0.001 * cnt
     ranked = sorted(item_scores.items(), key=lambda x: -x[1])
     top_items = [iid for iid, _ in ranked[:topk]]
     if len(top_items) < topk:
-        for iid, _ in item_counts.most_common(topk):
+        for iid, _ in target_dist.most_common(topk):
             if iid not in top_items:
                 top_items.append(iid)
             if len(top_items) >= topk:
@@ -146,6 +139,8 @@ def run():
     for seq in train_df["item_seq_raw"].dropna():
         for item_id in str(seq).split(","):
             item_counts[item_id] += 1
+
+    target_dist = Counter(train_df["target_iid"])
 
     transitions = defaultdict(Counter)
     for _, row in train_df.iterrows():
@@ -179,13 +174,12 @@ def run():
     user_feat_matrix, user_uids = build_user_feature_matrix(user_df)
     user_item_prefs = build_user_item_preferences(train_df)
 
-    COLD_THRESHOLD = 3
+    COLD_THRESHOLD = 1  # sl=0 uses cold, sl>=1 uses warm
 
-    # Evaluate NDCG
-    print("\nEvaluating NDCG@10...")
+    # Evaluate on train (long seq)
+    print("\nEvaluating NDCG@10 on train (long seq)...")
     ndcg_scores = []
     hit_scores = []
-    pos_dist = Counter()
     for _, row in train_df.head(2000).iterrows():
         target = row["target_iid"]
         sl = seq_len(row["item_seq_raw"])
@@ -194,37 +188,31 @@ def run():
                                  item_counts, transitions, cooccur, last_to_target)
         else:
             preds = predict_cold(row["uid"], user_feat_matrix, user_uids,
-                                 user_item_prefs, item_counts)
-        for i, item in enumerate(preds):
-            if item == target:
-                ndcg_scores.append(1.0 / np.log2(i + 2))
-                pos_dist[i + 1] += 1
-                break
-        else:
-            ndcg_scores.append(0.0)
+                                 user_item_prefs, target_dist)
+        ndcg_scores.append(ndcg_at_k(preds, target))
         hit_scores.append(1.0 if target in preds else 0.0)
-
     print(f"  Hit@10:  {np.mean(hit_scores):.4f}")
     print(f"  NDCG@10: {np.mean(ndcg_scores):.4f}")
-    total = sum(pos_dist.values())
-    for pos in range(1, 11):
-        cnt = pos_dist.get(pos, 0)
-        pct = cnt / total * 100 if total > 0 else 0
-        print(f"  Position {pos}: {cnt} ({pct:.1f}%)")
 
     # Generate test predictions
     print("\nGenerating test predictions...")
     predictions = {}
+    cold_count = 0
+    warm_count = 0
     for _, row in test_df.iterrows():
         uid = row["uid"]
         sl = seq_len(row["item_seq_raw"])
         if sl >= COLD_THRESHOLD:
             preds = predict_warm(row["item_seq_raw"], row["item_seq_dedup"],
                                  item_counts, transitions, cooccur, last_to_target)
+            warm_count += 1
         else:
             preds = predict_cold(uid, user_feat_matrix, user_uids,
-                                 user_item_prefs, item_counts)
+                                 user_item_prefs, target_dist)
+            cold_count += 1
         predictions[uid] = preds
+
+    print(f"  Cold-start: {cold_count}, Warm: {warm_count}")
 
     rows = []
     for _, row in sample_sub.iterrows():
