@@ -71,6 +71,20 @@ def to_sparse_tensor(mat):
 # 模型
 # ─────────────────────────────────────────────
 
+class FocalLoss(nn.Module):
+    """Focal Loss: 降低易分样本权重，聚焦难分样本"""
+    def __init__(self, alpha=None, gamma=2.0):
+        super().__init__()
+        self.alpha = alpha  # 类别权重 (tensor, shape=[num_classes])
+        self.gamma = gamma
+
+    def forward(self, logits, targets):
+        ce_loss = F.cross_entropy(logits, targets, weight=self.alpha, reduction="none")
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
+
+
 class GCNLayer(nn.Module):
     def __init__(self, in_d, out_d):
         super().__init__()
@@ -162,11 +176,15 @@ def train():
     trn_mask[trn] = True
     val_mask[val] = True
 
-    # 类别权重
+    # 类别权重 (基于有效样本数: w = (1-beta) / (1-beta^n))
     cnt = np.bincount(labels[trn], minlength=10)
-    w = 1.0 / (cnt + 1e-6)
+    beta = 0.9999
+    effective_num = 1.0 - np.power(beta, cnt)
+    w = (1.0 - beta) / (effective_num + 1e-6)
     w = w / w.sum() * 10
     w_t = torch.from_numpy(w.astype(np.float32)).to(DEVICE)
+    print(f"类别分布: {cnt.tolist()}")
+    print(f"有效样本权重: {w.round(3).tolist()}")
 
     # 模型
     if config["model_type"] == "GCN":
