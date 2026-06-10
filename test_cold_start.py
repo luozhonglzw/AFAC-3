@@ -1,9 +1,9 @@
-"""NDCG-optimized recommendation for test distribution (short seq + cold-start)"""
-
+"""Test different cold-start K values for the 00:14 version"""
 import os
 import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict
+from sklearn.metrics.pairwise import cosine_similarity
 
 DATA_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -15,17 +15,6 @@ def load_data():
     user_df = pd.read_csv(os.path.join(base, "user.csv"))
     sample_sub = pd.read_csv(os.path.join(base, "sample_submission.csv"))
     return train, test, user_df, sample_sub
-
-
-def parse_seq_counts(s):
-    if pd.isna(s) or str(s).strip() == "":
-        return {}
-    result = {}
-    for part in str(s).split(","):
-        parts = part.split(":")
-        if len(parts) == 2:
-            result[parts[0]] = int(parts[1])
-    return result
 
 
 def seq_len(s):
@@ -90,8 +79,7 @@ def predict_warm(seq_raw, seq_dedup, item_counts, transitions, cooccur,
     return [iid for iid, _ in ranked[:topk]]
 
 
-def predict_cold(uid, user_feat_matrix, user_uids, user_item_prefs, target_dist, topk=10):
-    from sklearn.metrics.pairwise import cosine_similarity
+def predict_cold(uid, user_feat_matrix, user_uids, user_item_prefs, target_dist, k=50, topk=10):
     user_idx = np.where(user_uids == uid)[0]
     if len(user_idx) == 0:
         return [iid for iid, _ in target_dist.most_common(topk)]
@@ -107,7 +95,7 @@ def predict_cold(uid, user_feat_matrix, user_uids, user_item_prefs, target_dist,
             for target in user_item_prefs[sim_uid]:
                 item_scores[target] += sims[idx]
             count += 1
-            if count >= 50:
+            if count >= k:
                 break
     for iid, cnt in target_dist.most_common(20):
         if iid not in item_scores:
@@ -174,56 +162,52 @@ def run():
     user_feat_matrix, user_uids = build_user_feature_matrix(user_df)
     user_item_prefs = build_user_item_preferences(train_df)
 
-    COLD_THRESHOLD = 1  # sl=0 uses cold, sl>=1 uses warm
+    COLD_THRESHOLD = 1
 
-    # Evaluate on train (long seq)
-    print("\nEvaluating NDCG@10 on train (long seq)...")
-    ndcg_scores = []
-    hit_scores = []
-    for _, row in train_df.head(2000).iterrows():
-        target = row["target_iid"]
-        sl = seq_len(row["item_seq_raw"])
-        if sl >= COLD_THRESHOLD:
-            preds = predict_warm(row["item_seq_raw"], row["item_seq_dedup"],
-                                 item_counts, transitions, cooccur, last_to_target)
-        else:
-            preds = predict_cold(row["uid"], user_feat_matrix, user_uids,
-                                 user_item_prefs, target_dist)
-        ndcg_scores.append(ndcg_at_k(preds, target))
-        hit_scores.append(1.0 if target in preds else 0.0)
-    print(f"  Hit@10:  {np.mean(hit_scores):.4f}")
-    print(f"  NDCG@10: {np.mean(ndcg_scores):.4f}")
+    # Test different K values for cold-start
+    print("\n=== Testing Cold-Start K Values ===")
+    for k in [15, 20, 30, 40, 50]:
+        ndcg_scores = []
+        hit_scores = []
+        cold_count = 0
+        for _, row in test_df.iterrows():
+            uid = row["uid"]
+            sl = seq_len(row["item_seq_raw"])
+            if sl >= COLD_THRESHOLD:
+                preds = predict_warm(row["item_seq_raw"], row["item_seq_dedup"],
+                                     item_counts, transitions, cooccur, last_to_target)
+            else:
+                preds = predict_cold(uid, user_feat_matrix, user_uids,
+                                     user_item_prefs, target_dist, k=k)
+                cold_count += 1
+            # We can't compute NDCG on test (no target), so just count predictions
+        print(f"  K={k}: cold_users={cold_count}")
 
-    # Generate test predictions
-    print("\nGenerating test predictions...")
-    predictions = {}
-    cold_count = 0
-    warm_count = 0
-    for _, row in test_df.iterrows():
-        uid = row["uid"]
-        sl = seq_len(row["item_seq_raw"])
-        if sl >= COLD_THRESHOLD:
-            preds = predict_warm(row["item_seq_raw"], row["item_seq_dedup"],
-                                 item_counts, transitions, cooccur, last_to_target)
-            warm_count += 1
-        else:
-            preds = predict_cold(uid, user_feat_matrix, user_uids,
-                                 user_item_prefs, target_dist)
-            cold_count += 1
-        predictions[uid] = preds
+    # Generate A2.csv for each K value
+    print("\n=== Generating A2.csv for each K ===")
+    for k in [15, 20, 30, 40, 50]:
+        predictions = {}
+        for _, row in test_df.iterrows():
+            uid = row["uid"]
+            sl = seq_len(row["item_seq_raw"])
+            if sl >= COLD_THRESHOLD:
+                preds = predict_warm(row["item_seq_raw"], row["item_seq_dedup"],
+                                     item_counts, transitions, cooccur, last_to_target)
+            else:
+                preds = predict_cold(uid, user_feat_matrix, user_uids,
+                                     user_item_prefs, target_dist, k=k)
+            predictions[uid] = preds
 
-    print(f"  Cold-start: {cold_count}, Warm: {warm_count}")
+        rows = []
+        for _, row in sample_sub.iterrows():
+            uid = row["uid"]
+            preds = predictions.get(uid, list(item_counts.keys())[:10])
+            rows.append({"uid": uid, "prediction": ",".join(preds)})
 
-    rows = []
-    for _, row in sample_sub.iterrows():
-        uid = row["uid"]
-        preds = predictions.get(uid, list(item_counts.keys())[:10])
-        rows.append({"uid": uid, "prediction": ",".join(preds)})
-
-    sub = pd.DataFrame(rows)
-    out_path = os.path.join(DATA_ROOT, "A2.csv")
-    sub.to_csv(out_path, index=False)
-    print(f"Saved: {out_path}")
+        sub = pd.DataFrame(rows)
+        out_path = os.path.join(DATA_ROOT, f"A2_k{k}.csv")
+        sub.to_csv(out_path, index=False)
+        print(f"  Saved: {out_path}")
 
 
 if __name__ == "__main__":
