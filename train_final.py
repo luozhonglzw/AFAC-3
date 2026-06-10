@@ -58,7 +58,8 @@ def build_user_features(user_df):
 
 def extract_features(uid, iid, u_feats, item_feats, item_counts, transitions,
                      last_to_target, item_cat_map, items_raw, items_dedup,
-                     raw_set, last_item, hist_len, hist_unique):
+                     raw_set, last_item, hist_len, hist_unique,
+                     pair_transitions=None, last2_to_target=None, prev_item=None):
     i_feats = item_feats.get(iid, {"i_cat_01": 0, "i_cat_02": 0, "i_cat_03": 0, "i_bucket_01": 0})
     u_cat_01 = u_feats.get("u_cat_01", 0)
     u_cat_02 = u_feats.get("u_cat_02", 0)
@@ -82,6 +83,14 @@ def extract_features(uid, iid, u_feats, item_feats, item_counts, transitions,
     trans_score = 0
     if last_item and last_item in transitions:
         trans_score = transitions[last_item].get(iid, 0)
+    pair_trans_score = 0
+    pair_l2t_score = 0
+    if prev_item and last_item and pair_transitions:
+        pair = (prev_item, last_item)
+        if pair in pair_transitions:
+            pair_trans_score = pair_transitions[pair].get(iid, 0)
+        if last2_to_target and pair in last2_to_target:
+            pair_l2t_score = last2_to_target[pair].get(iid, 0)
     last_cat = item_cat_map.get(last_item, (0, 0, 0)) if last_item else (0, 0, 0)
     cand_cat = (i_cat_01, i_cat_02, i_cat_03)
     cat_match = sum(1 for a, b in zip(cand_cat, last_cat) if a == b) / 3.0
@@ -102,11 +111,13 @@ def extract_features(uid, iid, u_feats, item_feats, item_counts, transitions,
         i_cat_01, i_cat_02, i_cat_03, i_bucket_01,
         log_pop, in_history, is_last,
         l2t_score, trans_score, cat_match, hist_cat_match, cooccur_score,
+        pair_trans_score, pair_l2t_score,
     ]
 
 
 def predict_ranker(row, model, item_feats, user_feats, item_counts, transitions,
-                   last_to_target, item_cat_map, target_dist, topk=10):
+                   last_to_target, item_cat_map, target_dist,
+                   pair_transitions=None, last2_to_target=None, topk=10):
     uid = row["uid"]
     seq_raw = str(row["item_seq_raw"]).strip()
     seq_dedup = str(row["item_seq_dedup"]).strip()
@@ -132,10 +143,12 @@ def predict_ranker(row, model, item_feats, user_feats, item_counts, transitions,
         candidates.add(item)
     X_cand = []
     cand_list = []
+    prev_item = items_dedup[-2] if len(items_dedup) >= 2 else None
     for iid in candidates:
         feat = extract_features(uid, iid, u_feats, item_feats, item_counts,
                                 transitions, last_to_target, item_cat_map,
-                                items_raw, items_dedup, raw_set, last_item, hist_len, hist_unique)
+                                items_raw, items_dedup, raw_set, last_item, hist_len, hist_unique,
+                                pair_transitions, last2_to_target, prev_item)
         X_cand.append(feat)
         cand_list.append(iid)
     if not X_cand:
@@ -247,13 +260,15 @@ def run():
         items_dedup = seq_dedup.split(",") if seq_dedup and seq_dedup != "nan" else []
         raw_set = set(items_raw)
         last_item = items_dedup[-1] if items_dedup else None
+        prev_item = items_dedup[-2] if len(items_dedup) >= 2 else None
         u_feats = user_feats.get(uid, {})
         hist_len = len(items_raw)
         hist_unique = len(set(items_raw))
 
         feat = extract_features(uid, target, u_feats, item_feats, item_counts,
                                 transitions, last_to_target, item_cat_map,
-                                items_raw, items_dedup, raw_set, last_item, hist_len, hist_unique)
+                                items_raw, items_dedup, raw_set, last_item, hist_len, hist_unique,
+                                pair_transitions, last2_to_target, prev_item)
         X_rows.append(feat)
         y_labels.append(1)
 
@@ -264,7 +279,8 @@ def run():
             if neg_item != target and neg_item not in raw_set:
                 feat = extract_features(uid, neg_item, u_feats, item_feats, item_counts,
                                         transitions, last_to_target, item_cat_map,
-                                        items_raw, items_dedup, raw_set, last_item, hist_len, hist_unique)
+                                        items_raw, items_dedup, raw_set, last_item, hist_len, hist_unique,
+                                        pair_transitions, last2_to_target, prev_item)
                 X_rows.append(feat)
                 y_labels.append(0)
                 neg_count += 1
@@ -352,7 +368,8 @@ def run():
             return predict_cold(uid, topk)
         elif sl <= 2:
             return predict_ranker(row, model, item_feats, user_feats, item_counts,
-                                  transitions, last_to_target, item_cat_map, target_dist, topk)
+                                  transitions, last_to_target, item_cat_map, target_dist,
+                                  pair_transitions, last2_to_target, topk)
         else:
             return predict_warm(seq_raw, seq_dedup, topk)
 
