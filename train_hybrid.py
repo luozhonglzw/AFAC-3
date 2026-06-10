@@ -221,14 +221,14 @@ def run():
                 if i != j:
                     cooccur[items[i]][items[j]] += 1
 
-    # Build XGBoost training data (use subset for speed)
+    # Build XGBoost training data
     print("Building XGBoost training data...")
     np.random.seed(42)
     all_items = list(item_counts.keys())
     X_rows = []
     y_labels = []
-    neg_per_pos = 5
-    for _, row in train_df.head(20000).iterrows():
+    neg_per_pos = 9
+    for _, row in train_df.iterrows():
         uid = row["uid"]
         target = row["target_iid"]
         seq_raw = str(row["item_seq_raw"]).strip()
@@ -272,7 +272,7 @@ def run():
     )
     model.fit(X_train, y_train)
 
-    # Heuristic warm predictor
+    # Heuristic warm predictor - returns topk candidates
     def predict_warm(seq_raw, seq_dedup, topk=10):
         scores = defaultdict(float)
         items_raw = str(seq_raw).strip().split(",") if pd.notna(seq_raw) and str(seq_raw).strip() else []
@@ -306,6 +306,40 @@ def run():
         ranked = sorted(scores.items(), key=lambda x: -x[1])
         return [iid for iid, _ in ranked[:topk]]
 
+    # Heuristic returns more candidates for re-ranking
+    def predict_warm_candidates(seq_raw, seq_dedup, ncands=50):
+        scores = defaultdict(float)
+        items_raw = str(seq_raw).strip().split(",") if pd.notna(seq_raw) and str(seq_raw).strip() else []
+        items_dedup = str(seq_dedup).strip().split(",") if pd.notna(seq_dedup) and str(seq_dedup).strip() else []
+        raw_set = set(items_raw)
+        for iid, cnt in item_counts.items():
+            scores[iid] += 0.001 * cnt
+        l2t_items = set()
+        if items_dedup:
+            last_item = items_dedup[-1]
+            if last_item in transitions:
+                for next_item, cnt in transitions[last_item].items():
+                    scores[next_item] += 0.15 * cnt
+            if last_item in last_to_target:
+                for target, cnt in last_to_target[last_item].items():
+                    scores[target] += 3000.0 * cnt
+                    l2t_items.add(target)
+        recent = items_dedup[-3:] if len(items_dedup) >= 3 else items_dedup
+        for item in recent:
+            if item in cooccur:
+                for related, cnt in cooccur[item].items():
+                    scores[related] += 0.15 * cnt
+        user_freq = Counter(items_raw)
+        for iid, cnt in user_freq.items():
+            scores[iid] += 500.0 * cnt
+        for item in l2t_items:
+            mult = 100.0
+            if item in raw_set:
+                mult *= 3.0
+            scores[item] *= mult
+        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        return [iid for iid, _ in ranked[:ncands]]
+
     def predict_cold(uid, topk=10):
         cluster_id = uid_to_cluster.get(uid, 0)
         rec = list(cluster_recs.get(cluster_id, []))
@@ -316,6 +350,33 @@ def run():
                 if len(rec) >= topk:
                     break
         return rec[:topk]
+
+    def predict_xgb_rerank(row, candidates, topk=10):
+        """Re-rank heuristic candidates using XGBoost."""
+        uid = row["uid"]
+        seq_raw = str(row["item_seq_raw"]).strip()
+        seq_dedup = str(row["item_seq_dedup"]).strip()
+        if not seq_raw or seq_raw == "nan":
+            return candidates[:topk]
+        items_raw = seq_raw.split(",")
+        items_dedup = seq_dedup.split(",") if seq_dedup and seq_dedup != "nan" else []
+        raw_set = set(items_raw)
+        last_item = items_dedup[-1] if items_dedup else None
+        u_feats = user_feats.get(uid, {})
+        hist_len = len(items_raw)
+        hist_unique = len(set(items_raw))
+        X_cand = []
+        for iid in candidates:
+            feat = extract_features(uid, iid, u_feats, item_feats, item_counts,
+                                    transitions, last_to_target, item_cat_map,
+                                    items_raw, items_dedup, raw_set, last_item, hist_len, hist_unique)
+            X_cand.append(feat)
+        if not X_cand:
+            return candidates[:topk]
+        X_cand = np.array(X_cand)
+        probs = model.predict_proba(X_cand)[:, 1]
+        ranked_indices = np.argsort(probs)[::-1]
+        return [candidates[i] for i in ranked_indices[:topk]]
 
     def predict_hybrid(row, topk=10):
         uid = row["uid"]
