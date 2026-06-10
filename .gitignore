@@ -7,7 +7,7 @@ A推荐.zip
 # 提交文件 (本地保留，不上传)
 A1.csv
 A2.csv
-prediction.zip
+prediction*.zip
 
 # 模型检查点
 checkpoints/
