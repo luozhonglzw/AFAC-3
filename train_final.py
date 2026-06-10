@@ -293,7 +293,7 @@ def run():
 
     print("Training XGBRanker (LambdaMART)...")
     model = xgb.XGBRanker(
-        max_depth=6, n_estimators=200, learning_rate=0.05,
+        max_depth=24, n_estimators=200, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8, random_state=42,
         objective="rank:ndcg", eval_metric="ndcg@10",
         lambdarank_num_pair_per_sample=10,
@@ -362,16 +362,12 @@ def run():
     def predict_hybrid(row, topk=10):
         uid = row["uid"]
         sl = seq_len(row["item_seq_raw"])
-        seq_raw = row["item_seq_raw"]
-        seq_dedup = row["item_seq_dedup"]
         if sl == 0:
             return predict_cold(uid, topk)
-        elif sl <= 2:
+        else:
             return predict_ranker(row, model, item_feats, user_feats, item_counts,
                                   transitions, last_to_target, item_cat_map, target_dist,
                                   pair_transitions, last2_to_target, topk)
-        else:
-            return predict_warm(seq_raw, seq_dedup, topk)
 
     # Validate
     print("\n=== Validation ===")
