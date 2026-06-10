@@ -44,10 +44,18 @@
       "hit_at_10": 0.854,
       "ndcg_at_10": 0.606,
       "notes": "NDCG optimization: multiplicative l2t boost (50x) + intersection boost (4.5x for l2t items also in history). Reduces mw from 0.5 to 0.18 to let l2t signal dominate."
+    },
+    {
+      "id": 7,
+      "model": "XGBRanker_LambdaMART",
+      "config": {"max_depth": 24, "n_estimators": 200, "learning_rate": 0.05, "neg_per_pos": 19, "features": 24},
+      "hit_at_10": 0.867,
+      "ndcg_at_10": 0.527,
+      "notes": "LambdaMART ranker with 24 features including pair transitions and pair l2t. depth=24 optimized via grid search. sl=1: 0.527, sl=2: 0.562, sl=3: 0.539. Major improvement over heuristic for short sequences."
     }
   ],
-  "best_model": "Heuristic+NDCG_boost+intersection",
-  "best_hit_at_10": 0.854,
-  "best_ndcg_at_10": 0.606,
+  "best_model": "XGBRanker_LambdaMART",
+  "best_hit_at_10": 0.867,
+  "best_ndcg_at_10": 0.539,
   "timestamp": "2026-06-09"
 }
