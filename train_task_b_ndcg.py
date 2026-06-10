@@ -1,4 +1,4 @@
-"""Optimized recommendation: KMeans cold-start + warm strategy for short sequences"""
+"""Final optimized recommendation: K=30 cold-start + warm for short sequences"""
 
 import os
 import numpy as np
@@ -31,33 +31,6 @@ def ndcg_at_k(ranked_list, target_item, k=10):
         if item == target_item:
             return 1.0 / np.log2(i + 2)
     return 0.0
-
-
-def build_cluster_recs(user_df, train_df, k=20):
-    """Build KMeans cluster-based recommendations."""
-    feat_cols = [c for c in user_df.columns if c.startswith("u_cat_")]
-    X = user_df[feat_cols].values.astype(np.float32)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-    clusters = kmeans.fit_predict(X_scaled)
-
-    uid_to_cluster = {}
-    for i in range(len(user_df)):
-        uid_to_cluster[user_df.iloc[i]["uid"]] = clusters[i]
-
-    cluster_targets = defaultdict(Counter)
-    for _, row in train_df.iterrows():
-        uid = row["uid"]
-        target = row["target_iid"]
-        if uid in uid_to_cluster:
-            cluster_targets[uid_to_cluster[uid]][target] += 1
-
-    cluster_recs = {}
-    for c in range(k):
-        cluster_recs[c] = [iid for iid, _ in cluster_targets[c].most_common(10)]
-
-    return uid_to_cluster, cluster_recs, kmeans, scaler
 
 
 def run():
@@ -101,21 +74,29 @@ def run():
         items = seq_dedup.split(",")
         last_to_target[items[-1]][target] += 1
 
-    # Build cluster recommendations
-    print("Building KMeans clusters (K=20)...")
-    uid_to_cluster, cluster_recs, kmeans, scaler = build_cluster_recs(user_df, train_df, k=20)
+    # Build KMeans clusters (K=30, best from grid search)
+    print("Building KMeans clusters (K=30)...")
+    feat_cols = [c for c in user_df.columns if c.startswith("u_cat_")]
+    X = user_df[feat_cols].values.astype(np.float32)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    kmeans = KMeans(n_clusters=30, random_state=42, n_init=10)
+    clusters = kmeans.fit_predict(X_scaled)
 
-    # Item similarity from categories
-    cat_features = item_df[["i_cat_01", "i_cat_02", "i_cat_03"]].values
-    iid_list = item_df["iid"].tolist()
-    item_sim = defaultdict(dict)
-    for i in range(len(iid_list)):
-        for j in range(i + 1, len(iid_list)):
-            shared = np.sum(cat_features[i] == cat_features[j])
-            if shared > 0:
-                sim = shared / 3.0
-                item_sim[iid_list[i]][iid_list[j]] = sim
-                item_sim[iid_list[j]][iid_list[i]] = sim
+    uid_to_cluster = {}
+    for i in range(len(user_df)):
+        uid_to_cluster[user_df.iloc[i]["uid"]] = clusters[i]
+
+    cluster_targets = defaultdict(Counter)
+    for _, row in train_df.iterrows():
+        uid = row["uid"]
+        target = row["target_iid"]
+        if uid in uid_to_cluster:
+            cluster_targets[uid_to_cluster[uid]][target] += 1
+
+    cluster_recs = {}
+    for c in range(30):
+        cluster_recs[c] = [iid for iid, _ in cluster_targets[c].most_common(10)]
 
     def predict_warm(seq_raw, seq_dedup, topk=10):
         scores = defaultdict(float)
@@ -129,29 +110,29 @@ def run():
             last_item = items_dedup[-1]
             if last_item in transitions:
                 for next_item, cnt in transitions[last_item].items():
-                    scores[next_item] += 0.18 * cnt
+                    scores[next_item] += 0.15 * cnt
             if last_item in last_to_target:
                 for target, cnt in last_to_target[last_item].items():
-                    scores[target] += 2000.0 * cnt
+                    scores[target] += 3000.0 * cnt
                     l2t_items.add(target)
         recent = items_dedup[-3:] if len(items_dedup) >= 3 else items_dedup
         for item in recent:
             if item in cooccur:
                 for related, cnt in cooccur[item].items():
-                    scores[related] += 0.18 * cnt
+                    scores[related] += 0.15 * cnt
         user_freq = Counter(items_raw)
         for iid, cnt in user_freq.items():
-            scores[iid] += 1000.0 * cnt
+            scores[iid] += 500.0 * cnt
         for item in l2t_items:
-            mult = 50.0
+            mult = 100.0
             if item in raw_set:
-                mult *= 4.5
+                mult *= 3.0
             scores[item] *= mult
         ranked = sorted(scores.items(), key=lambda x: -x[1])
         return [iid for iid, _ in ranked[:topk]]
 
     def predict_cold(uid, topk=10):
-        """Cold-start: cluster recommendation + popular fallback."""
+        """Cold-start: K=30 cluster recommendation."""
         cluster_id = uid_to_cluster.get(uid, 0)
         rec = list(cluster_recs.get(cluster_id, []))
         if len(rec) < topk:
@@ -163,29 +144,21 @@ def run():
         return rec[:topk]
 
     def predict_mixed(seq_raw, seq_dedup, uid, topk=10):
-        """Mixed strategy based on sequence length."""
         sl = seq_len(seq_raw)
-
         if sl == 0:
             return predict_cold(uid, topk)
-
-        # sl >= 3: pure warm (best NDCG)
         if sl >= 3:
             return predict_warm(seq_raw, seq_dedup, topk)
-
         # sl 1-2: mix warm with cluster
         warm_preds = predict_warm(seq_raw, seq_dedup, topk)
         cluster_rec = predict_cold(uid, topk)
-
         if sl == 1:
             warm_count, cluster_count = 6, 4
-        else:  # sl == 2
+        else:
             warm_count, cluster_count = 7, 3
-
         warm_top = warm_preds[:warm_count]
         cluster_top = [x for x in cluster_rec if x not in warm_top][:cluster_count]
         preds = warm_top + cluster_top
-
         if len(preds) < topk:
             for iid, _ in target_dist.most_common(topk * 2):
                 if iid not in preds:
@@ -194,22 +167,22 @@ def run():
                     break
         return preds[:topk]
 
-    # Evaluate on validation
+    # Validate
     print("\n=== Validation ===")
     for sl in [1, 2, 3]:
-        val_subset = train_df[train_df["item_seq_raw"].apply(seq_len) == sl]
-        if len(val_subset) == 0:
+        val_sub = train_df[train_df["item_seq_raw"].apply(seq_len) == sl]
+        if len(val_sub) == 0:
             continue
-        val_subset = val_subset.tail(min(1000, len(val_subset)))
+        val_sub = val_sub.tail(min(1000, len(val_sub)))
         ndcg_scores = []
         hit_scores = []
-        for _, row in val_subset.iterrows():
+        for _, row in val_sub.iterrows():
             preds = predict_mixed(row["item_seq_raw"], row["item_seq_dedup"], row["uid"])
             ndcg_scores.append(ndcg_at_k(preds, row["target_iid"]))
             hit_scores.append(1.0 if row["target_iid"] in preds else 0.0)
-        print(f"  sl={sl}: NDCG={np.mean(ndcg_scores):.4f}, Hit={np.mean(hit_scores):.4f} (n={len(val_subset)})")
+        print(f"  sl={sl}: NDCG={np.mean(ndcg_scores):.4f}, Hit={np.mean(hit_scores):.4f}")
 
-    # Test-like distribution validation
+    # Test-like distribution
     print("\n=== Test-like Distribution ===")
     np.random.seed(42)
     sl1 = train_df[train_df["item_seq_raw"].apply(seq_len) == 1]
@@ -235,13 +208,12 @@ def run():
             preds = predict_mixed(row["item_seq_raw"], row["item_seq_dedup"], row["uid"])
             ndcg_scores.append(ndcg_at_k(preds, row["target_iid"]))
             hit_scores.append(1.0 if row["target_iid"] in preds else 0.0)
-        print(f"  Overall: NDCG={np.mean(ndcg_scores):.4f}, Hit={np.mean(hit_scores):.4f} (n={len(val_all)})")
+        print(f"  Overall: NDCG={np.mean(ndcg_scores):.4f}, Hit={np.mean(hit_scores):.4f}")
 
     # Generate test predictions
     print("\n=== Generating Test Predictions ===")
     predictions = {}
     cold_count = 0
-    warm_count = 0
     for _, row in test_df.iterrows():
         uid = row["uid"]
         sl = seq_len(row["item_seq_raw"])
@@ -249,10 +221,7 @@ def run():
         predictions[uid] = preds
         if sl == 0:
             cold_count += 1
-        else:
-            warm_count += 1
-
-    print(f"  Cold: {cold_count}, Warm: {warm_count}")
+    print(f"  Cold: {cold_count}, Warm: {len(test_df) - cold_count}")
 
     rows = []
     for _, row in sample_sub.iterrows():
