@@ -349,15 +349,8 @@ def run():
         return [iid for iid, _ in ranked[:topk]]
 
     def predict_cold(uid, topk=10):
-        cluster_id = uid_to_cluster.get(uid, 0)
-        rec = list(cluster_recs.get(cluster_id, []))
-        if len(rec) < topk:
-            for iid, _ in target_dist.most_common(topk):
-                if iid not in rec:
-                    rec.append(iid)
-                if len(rec) >= topk:
-                    break
-        return rec[:topk]
+        # Pure popular for cold-start (sl=0)
+        return [iid for iid, _ in target_dist.most_common(topk)]
 
     def predict_hybrid(row, topk=10):
         uid = row["uid"]
