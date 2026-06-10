@@ -166,6 +166,7 @@ def run():
             item_counts[item_id] += 1
 
     transitions = defaultdict(Counter)
+    pair_transitions = defaultdict(Counter)
     for _, row in train_df.iterrows():
         seq = str(row["item_seq_raw"]).strip()
         if not seq or seq == "nan":
@@ -173,8 +174,11 @@ def run():
         items = seq.split(",")
         for i in range(len(items) - 1):
             transitions[items[i]][items[i + 1]] += 1
+        for i in range(len(items) - 2):
+            pair_transitions[(items[i], items[i + 1])][items[i + 2]] += 1
 
     last_to_target = defaultdict(Counter)
+    last2_to_target = defaultdict(Counter)
     for _, row in train_df.iterrows():
         target = row["target_iid"]
         seq_dedup = str(row["item_seq_dedup"]).strip()
@@ -182,6 +186,8 @@ def run():
             continue
         items = seq_dedup.split(",")
         last_to_target[items[-1]][target] += 1
+        if len(items) >= 2:
+            last2_to_target[(items[-2], items[-1])][target] += 1
 
     item_cat_map = {}
     for _, row in item_df.iterrows():
@@ -289,13 +295,27 @@ def run():
         l2t_items = set()
         if items_dedup:
             last_item = items_dedup[-1]
+            prev_item = items_dedup[-2] if len(items_dedup) >= 2 else None
             if last_item in transitions:
                 for next_item, cnt in transitions[last_item].items():
                     scores[next_item] += 0.15 * cnt
+            # Pair transition signal
+            if prev_item and last_item:
+                pair = (prev_item, last_item)
+                if pair in pair_transitions:
+                    for nxt, cnt in pair_transitions[pair].items():
+                        scores[nxt] += 5.0 * cnt
             if last_item in last_to_target:
                 for target, cnt in last_to_target[last_item].items():
                     scores[target] += 3000.0 * cnt
                     l2t_items.add(target)
+            # Pair l2t signal
+            if prev_item and last_item:
+                pair = (prev_item, last_item)
+                if pair in last2_to_target:
+                    for target, cnt in last2_to_target[pair].items():
+                        scores[target] += 8000.0 * cnt
+                        l2t_items.add(target)
         recent = items_dedup[-3:] if len(items_dedup) >= 3 else items_dedup
         for item in recent:
             if item in cooccur:
